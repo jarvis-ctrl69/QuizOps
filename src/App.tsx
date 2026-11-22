@@ -26,8 +26,15 @@ interface Submission {
 const API_BASE = 'http://localhost:5000';
 
 function App() {
-  const [role, setRole] = useState<'teacher' | 'student'>('teacher');
-  const [token, setToken] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'teacher' | 'student'>('student');
+
+  // Auth State
+  const [teacherToken, setTeacherToken] = useState<string | null>(null);
+  const [teacherUser, setTeacherUser] = useState('');
+  const [teacherPass, setTeacherPass] = useState('');
+  const [authError, setAuthError] = useState('');
+
+  // App Data
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [health, setHealth] = useState<any>(null);
 
@@ -48,11 +55,9 @@ function App() {
   const [studentAnswers, setStudentAnswers] = useState<{ [qId: number]: number }>({});
   const [quizResult, setQuizResult] = useState<any | null>(null);
 
-  // 1. Fetch Health and Quizzes on Load
   useEffect(() => {
     fetchHealth();
     fetchQuizzes();
-    loginUser('teacher', 'teacher123'); // Auto-login as teacher initially
   }, []);
 
   const fetchHealth = async () => {
@@ -75,10 +80,10 @@ function App() {
     }
   };
 
-  const fetchScores = async (authToken: string) => {
+  const fetchScores = async (token: string) => {
     try {
       const res = await fetch(`${API_BASE}/api/scores`, {
-        headers: { Authorization: `Bearer ${authToken}` }
+        headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
       if (Array.isArray(data)) setScores(data);
@@ -87,49 +92,55 @@ function App() {
     }
   };
 
-  const loginUser = async (userRole: 'teacher' | 'student', pass: string) => {
+  // Explicit Teacher Login
+  const handleTeacherLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+
     try {
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: userRole, password: pass })
+        body: JSON.stringify({ username: teacherUser, password: teacherPass })
       });
       const data = await res.json();
-      if (data.token) {
-        setToken(data.token);
-        setRole(userRole);
-        if (userRole === 'teacher') fetchScores(data.token);
+
+      if (!res.ok) {
+        setAuthError(data.error || 'Authentication failed');
+        return;
       }
-    } catch (err) {
-      console.error('Login error:', err);
+
+      if (data.user?.role !== 'teacher') {
+        setAuthError('Access Denied: Only teachers can access this portal');
+        return;
+      }
+
+      setTeacherToken(data.token);
+      setTeacherPass('');
+      fetchScores(data.token);
+    } catch {
+      setAuthError('Server unreachable. Is the backend running?');
     }
   };
 
-  // Switch role handler
-  const handleRoleSwitch = (newRole: 'teacher' | 'student') => {
-    setRole(newRole);
-    setQuizResult(null);
-    setSelectedQuiz(null);
-    if (newRole === 'teacher') {
-      loginUser('teacher', 'teacher123');
-    } else {
-      loginUser('student', 'student123');
-    }
+  const handleTeacherLogout = () => {
+    setTeacherToken(null);
+    setScores([]);
   };
 
-  // Add question to temporary list
   const handleAddQuestion = () => {
     if (!qText || !opt0 || !opt1 || !opt2 || !opt3) {
       alert('Please fill the question and all 4 options!');
       return;
     }
-    const newQ = {
-      question: qText,
-      options: [opt0, opt1, opt2, opt3],
-      correctAnswer: parseInt(correctOpt)
-    };
-    setCreatedQuestions([...createdQuestions, newQ]);
-    // Reset form
+    setCreatedQuestions([
+      ...createdQuestions,
+      {
+        question: qText,
+        options: [opt0, opt1, opt2, opt3],
+        correctAnswer: parseInt(correctOpt)
+      }
+    ]);
     setQText('');
     setOpt0('');
     setOpt1('');
@@ -137,7 +148,6 @@ function App() {
     setOpt3('');
   };
 
-  // Teacher Publishes the Quiz
   const handlePublishQuiz = async () => {
     if (!quizTitle || createdQuestions.length === 0) {
       alert('Please enter a Quiz Title and add at least one question!');
@@ -149,7 +159,7 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
+          Authorization: `Bearer ${teacherToken}`
         },
         body: JSON.stringify({
           title: quizTitle,
@@ -162,13 +172,15 @@ function App() {
         setQuizTitle('');
         setCreatedQuestions([]);
         fetchQuizzes();
+      } else {
+        const err = await res.json();
+        alert(`Failed: ${err.error}`);
       }
     } catch (err) {
       console.error('Publish error:', err);
     }
   };
 
-  // Student Submits Quiz
   const handleSubmitQuiz = async () => {
     if (!selectedQuiz) return;
     if (!studentName.trim()) {
@@ -194,7 +206,7 @@ function App() {
 
   return (
     <div className="app-container">
-      {/* Header with DevOps Health Badge */}
+      {/* Top Header */}
       <header className="header">
         <div className="logo-section">
           <h2>⚡ QuizOps Portal</h2>
@@ -207,165 +219,222 @@ function App() {
         </div>
       </header>
 
-      {/* Role Switcher Tabs */}
+      {/* Tabs */}
       <div className="role-switcher">
         <button
-          className={role === 'teacher' ? 'active-tab' : ''}
-          onClick={() => handleRoleSwitch('teacher')}
-        >
-          👩‍🏫 Teacher Dashboard
-        </button>
-        <button
-          className={role === 'student' ? 'active-tab' : ''}
-          onClick={() => handleRoleSwitch('student')}
+          className={activeTab === 'student' ? 'active-tab' : ''}
+          onClick={() => setActiveTab('student')}
         >
           👨‍🎓 Student Portal
         </button>
+        <button
+          className={activeTab === 'teacher' ? 'active-tab' : ''}
+          onClick={() => setActiveTab('teacher')}
+        >
+          🔒 Teacher Dashboard {teacherToken ? '(Active 🟢)' : '(Locked 🔑)'}
+        </button>
       </div>
 
-      {/* ================= TEACHER VIEW ================= */}
-      {role === 'teacher' && (
-        <div className="dashboard-grid">
-          <div className="card">
-            <h3>📝 Create & Publish a New Quiz</h3>
-            <div className="input-group">
-              <label>Quiz Title / Subject:</label>
-              <input
-                type="text"
-                placeholder="e.g. Python Basics, Math Trivia, World History"
-                value={quizTitle}
-                onChange={(e) => setQuizTitle(e.target.value)}
-              />
+      {/* ================= TEACHER PORTAL ================= */}
+      {activeTab === 'teacher' && (
+        <>
+          {/* 1. If NOT authenticated: Show Login Screen */}
+          {!teacherToken ? (
+            <div className="card login-card">
+              <h3>🔒 Teacher Authentication Required</h3>
+              <p className="login-subtitle">
+                Access is restricted to authorized faculty. Default credentials: <code>teacher</code> / <code>teacher123</code>
+              </p>
+
+              {authError && <div className="error-box">⚠️ {authError}</div>}
+
+              <form onSubmit={handleTeacherLogin}>
+                <div className="input-group">
+                  <label>Teacher Username:</label>
+                  <input
+                    type="text"
+                    placeholder="Enter teacher username"
+                    value={teacherUser}
+                    onChange={(e) => setTeacherUser(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="input-group">
+                  <label>Password:</label>
+                  <input
+                    type="password"
+                    placeholder="Enter password"
+                    value={teacherPass}
+                    onChange={(e) => setTeacherPass(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <button type="submit" className="btn-publish">
+                  🔑 Authenticate & Enter Dashboard
+                </button>
+              </form>
             </div>
-
-            <div className="question-creator">
-              <h4>Add Question #{createdQuestions.length + 1}</h4>
-              <input
-                type="text"
-                placeholder="Type question here..."
-                value={qText}
-                onChange={(e) => setQText(e.target.value)}
-              />
-
-              <div className="options-grid">
-                <input
-                  type="text"
-                  placeholder="Option A"
-                  value={opt0}
-                  onChange={(e) => setOpt0(e.target.value)}
-                />
-                <input
-                  type="text"
-                  placeholder="Option B"
-                  value={opt1}
-                  onChange={(e) => setOpt1(e.target.value)}
-                />
-                <input
-                  type="text"
-                  placeholder="Option C"
-                  value={opt2}
-                  onChange={(e) => setOpt2(e.target.value)}
-                />
-                <input
-                  type="text"
-                  placeholder="Option D"
-                  value={opt3}
-                  onChange={(e) => setOpt3(e.target.value)}
-                />
-              </div>
-
-              <div className="correct-select">
-                <label>Select Correct Option:</label>
-                <select value={correctOpt} onChange={(e) => setCorrectOpt(e.target.value)}>
-                  <option value="0">Option A</option>
-                  <option value="1">Option B</option>
-                  <option value="2">Option C</option>
-                  <option value="3">Option D</option>
-                </select>
-                <button type="button" className="btn-add" onClick={handleAddQuestion}>
-                  + Add Question to Quiz
+          ) : (
+            /* 2. If AUTHENTICATED: Show Teacher Tools */
+            <div>
+              <div className="teacher-bar">
+                <span>Logged in as: <strong>👩‍🏫 {teacherUser || 'teacher'}</strong> (Role: Verified Faculty)</span>
+                <button className="btn-logout" onClick={handleTeacherLogout}>
+                  🚪 Log Out
                 </button>
               </div>
-            </div>
 
-            {createdQuestions.length > 0 && (
-              <div className="preview-box">
-                <h4>Questions in current draft ({createdQuestions.length}):</h4>
-                <ul>
-                  {createdQuestions.map((q, idx) => (
-                    <li key={idx}>
-                      <strong>Q{idx + 1}:</strong> {q.question} (Correct: Option {String.fromCharCode(65 + q.correctAnswer)})
-                    </li>
-                  ))}
-                </ul>
-                <button className="btn-publish" onClick={handlePublishQuiz}>
-                  🚀 Publish Quiz to Students
-                </button>
+              <div className="dashboard-grid">
+                {/* Create Quiz Box */}
+                <div className="card">
+                  <h3>📝 Create & Publish a New Quiz</h3>
+                  <div className="input-group">
+                    <label>Quiz Title / Subject:</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Python Basics, Math Trivia, World History"
+                      value={quizTitle}
+                      onChange={(e) => setQuizTitle(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="question-creator">
+                    <h4>Add Question #{createdQuestions.length + 1}</h4>
+                    <input
+                      type="text"
+                      placeholder="Type question here..."
+                      value={qText}
+                      onChange={(e) => setQText(e.target.value)}
+                    />
+
+                    <div className="options-grid">
+                      <input
+                        type="text"
+                        placeholder="Option A"
+                        value={opt0}
+                        onChange={(e) => setOpt0(e.target.value)}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Option B"
+                        value={opt1}
+                        onChange={(e) => setOpt1(e.target.value)}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Option C"
+                        value={opt2}
+                        onChange={(e) => setOpt2(e.target.value)}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Option D"
+                        value={opt3}
+                        onChange={(e) => setOpt3(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="correct-select">
+                      <label>Select Correct Option:</label>
+                      <select value={correctOpt} onChange={(e) => setCorrectOpt(e.target.value)}>
+                        <option value="0">Option A</option>
+                        <option value="1">Option B</option>
+                        <option value="2">Option C</option>
+                        <option value="3">Option D</option>
+                      </select>
+                      <button type="button" className="btn-add" onClick={handleAddQuestion}>
+                        + Add Question to Quiz
+                      </button>
+                    </div>
+                  </div>
+
+                  {createdQuestions.length > 0 && (
+                    <div className="preview-box">
+                      <h4>Questions in draft ({createdQuestions.length}):</h4>
+                      <ul>
+                        {createdQuestions.map((q, idx) => (
+                          <li key={idx}>
+                            <strong>Q{idx + 1}:</strong> {q.question} (Option {String.fromCharCode(65 + q.correctAnswer)})
+                          </li>
+                        ))}
+                      </ul>
+                      <button className="btn-publish" onClick={handlePublishQuiz}>
+                        🚀 Publish Quiz to Students
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Submissions Table */}
+                <div className="card">
+                  <h3>📊 Live Student Submissions</h3>
+                  {scores.length === 0 ? (
+                    <p className="empty-text">No student submissions yet.</p>
+                  ) : (
+                    <table className="score-table">
+                      <thead>
+                        <tr>
+                          <th>Student</th>
+                          <th>Quiz</th>
+                          <th>Score</th>
+                          <th>Percentage</th>
+                          <th>Time</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {scores.map((s) => (
+                          <tr key={s.id}>
+                            <td><strong>{s.studentName}</strong></td>
+                            <td>{s.quizTitle}</td>
+                            <td>{s.score} / {s.totalQuestions}</td>
+                            <td>
+                              <span className={`badge ${s.percentage >= 60 ? 'badge-pass' : 'badge-fail'}`}>
+                                {s.percentage}%
+                              </span>
+                            </td>
+                            <td>{s.submittedAt}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
-
-          {/* Student Submissions Table */}
-          <div className="card">
-            <h3>📊 Live Student Submissions</h3>
-            {scores.length === 0 ? (
-              <p className="empty-text">No student submissions yet. Attend a quiz as a student to see scores appear here!</p>
-            ) : (
-              <table className="score-table">
-                <thead>
-                  <tr>
-                    <th>Student</th>
-                    <th>Quiz</th>
-                    <th>Score</th>
-                    <th>Percentage</th>
-                    <th>Time</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {scores.map((s) => (
-                    <tr key={s.id}>
-                      <td><strong>{s.studentName}</strong></td>
-                      <td>{s.quizTitle}</td>
-                      <td>{s.score} / {s.totalQuestions}</td>
-                      <td>
-                        <span className={`badge ${s.percentage >= 60 ? 'badge-pass' : 'badge-fail'}`}>
-                          {s.percentage}%
-                        </span>
-                      </td>
-                      <td>{s.submittedAt}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
+            </div>
+          )}
+        </>
       )}
 
-      {/* ================= STUDENT VIEW ================= */}
-      {role === 'student' && (
+      {/* ================= STUDENT PORTAL ================= */}
+      {activeTab === 'student' && (
         <div className="student-container">
           {!selectedQuiz && (
             <div className="card">
               <h3>📚 Available Quizzes</h3>
               <p>Select any quiz published by your teacher:</p>
               <div className="quiz-list">
-                {quizzes.map((q) => (
-                  <div key={q.id} className="quiz-card">
-                    <h4>{q.title}</h4>
-                    <p>{q.questions.length} Questions</p>
-                    <button
-                      className="btn-attend"
-                      onClick={() => {
-                        setSelectedQuiz(q);
-                        setStudentAnswers({});
-                        setQuizResult(null);
-                      }}
-                    >
-                      Attend Quiz →
-                    </button>
-                  </div>
-                ))}
+                {quizzes.length === 0 ? (
+                  <p className="empty-text">No quizzes published yet. Switch to Teacher Dashboard to create one!</p>
+                ) : (
+                  quizzes.map((q) => (
+                    <div key={q.id} className="quiz-card">
+                      <h4>{q.title}</h4>
+                      <p>{q.questions.length} Questions</p>
+                      <button
+                        className="btn-attend"
+                        onClick={() => {
+                          setSelectedQuiz(q);
+                          setStudentAnswers({});
+                          setQuizResult(null);
+                        }}
+                      >
+                        Attend Quiz →
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}
@@ -419,7 +488,6 @@ function App() {
             </div>
           )}
 
-          {/* Result Score Card */}
           {quizResult && (
             <div className="card result-card">
               <h3>🎉 Quiz Completed!</h3>
